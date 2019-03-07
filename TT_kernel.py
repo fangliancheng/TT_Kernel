@@ -7,6 +7,9 @@ import tntorch as tn
 import torch
 import time
 import tensorly as tl
+from math import ceil
+#Applying CP decomposition to W
+from tensorly.decomposition import parafac
 
 transform = transforms.Compose(
     [transforms.ToTensor(),
@@ -117,21 +120,24 @@ def feature_map(X):
 
 #randomly initialize learnable weights W
 X, Y, Z,P = np.meshgrid(range(32),range(32),range(32),range(32))
-W_full=torch.Tensor(np.sqrt(np.sqrt(X)*(Y+Z) + Y*Z**2)*(X + np.sin(Y)*np.cos(Z)+P))
-print(full.shape)
+W_full=tl.tensor(np.sqrt(np.sqrt(X)*(Y+Z) + Y*Z**2)*(X + np.sin(Y)*np.cos(Z)+P))
 
 #Applying CP decomposition to W
 from tensorly.decomposition import parafac
-factors = parafac(W_full,rank =3)
-len(factors)
+factor = parafac(W_full,rank =3)
+len(factor)
 #factors would be3matrixs, each one is 32*,each column represent one component in CP-decomposition
-print(factors.size())
+#factor is a list
 
 #wield formula in tensorly?
 #w_i is a 32*4 matrix, each column is one component of CP decomposition
-w1 = torch.from_numpy(factor[0], requires_grad = True)
-w2 = torch.from_numpy(factor[1], requires_grad = True)
-w3 = torch.from_numpy(factor[2], requires_grad = True)
+w1 = torch.from_numpy(factor[0])
+w2 = torch.from_numpy(factor[1])
+w3 = torch.from_numpy(factor[2])
+
+w1 = w1.clone().detach().requires_grad_(True)
+w2 = w2.clone().detach().requires_grad_(True)
+w3 = w3,clone().detach().requires_grad_(True)
 
 learning_rate = 1e-6
 
