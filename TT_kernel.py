@@ -48,11 +48,11 @@ def relu(x):
     return x
  """
 
-#Input: torch datatype 2-D matrix, e.g Cifer-10, 32*32 matrix (RGB?)
+#Input: torch datatype 2-D matrix, e.g Cifer-10, 32*32 matrix (take average over RGB)
 #First,devide it into window-patches,then reshape to column vectors, pick window size 16*16, no overlap, finally we get (x_1,...,x_4). x_i \in R^256
-#Second, pick a local feature map for each x_i, f:R^256--->R^32, the global feature map is defined as a tensor \in R^{256*256...*256} #64, see E.M paper (2)
+#Second, pick a local feature map for each x_i, f:R^256--->R^32, the global feature map is defined as a tensor \in R^{32*32*32*32}, see E.M paper (2)
 #Here we pick local feature map as ReLU(Ax+b), A,b are hyper-parameters. Return global feature map(a tensor)
-#above choice is too big in memery, simply chose local feature map f(x) =
+
 def feature_map(X):
     mat = X.numpy()
     stride = 16.0
@@ -129,7 +129,6 @@ len(factor)
 #factors would be3matrixs, each one is 32*,each column represent one component in CP-decomposition
 #factor is a list
 
-#wield formula in tensorly?
 #w_i is a 32*4 matrix, each column is one component of CP decomposition
 w1 = torch.from_numpy(factor[0])
 w2 = torch.from_numpy(factor[1])
