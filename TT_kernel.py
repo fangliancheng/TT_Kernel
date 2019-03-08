@@ -17,7 +17,7 @@ transform = transforms.Compose(
 
 trainset = torchvision.datasets.CIFAR10(root='./data', train=True,
                                         download=True, transform=transform)
-trainloader = torch.utils.data.DataLoader(trainset, batch_size=1,
+trainloader = torch.utils.data.DataLoader(trainset, batch_size=32,
                                           shuffle=True, num_workers=2)
 testset = torchvision.datasets.CIFAR10(root='./data', train=False,
                                        download=True, transform=transform)
@@ -33,25 +33,16 @@ dataiter = iter(trainloader)
 images, labels = dataiter.next()
 #print(images.size())
 
-#shape: 1 3 32 32
+#shape: 32 3 32 32
 #take average over RGB channels
 def aver(image):
     image_np = image.numpy()
-    image_input = np.zeros((32,32))
+    image_input = np.zeros(((32,32,32)))
     for i in range(0,31):
          for j in range(0,31):
-             image_input[i,j] =(image_np[0,0,i,j] + image_np[0,1,i,j] + image_np[0,2,i,j])/3
+             image_input[:,i,j] =(image_np[:,0,i,j] + image_np[:,1,i,j] + image_np[:,2,i,j])/3
     return image_input
-
-
-"""
-#input x should be a numpy array
-def relu(x):
-    for i in x.size():
-        if x[i] < 0:
-            x[i] = 0
-    return x
- """
+#output is 32 1 32 32
 
 #Test average
 #print(aver(images).shape)
@@ -65,7 +56,7 @@ def feature_map(X):
 
     #stride = 16.0
     #num_split = X.shape[0]/stride
-    temp = np.zeros((256,4))
+    temp = np.zeros(((32,256,4)))
     #print(temp.shape)
     """
     upper1 = np.hsplit(np.vsplit(mat, num_split)[0], num_split)
@@ -94,18 +85,20 @@ def feature_map(X):
         temp[:,i] = upper8[i - 56].flatten()
     """
 
-    upper_half = np.hsplit(np.vsplit(X, 2)[0], 2)
-    lower_half = np.hsplit(np.vsplit(X, 2)[1], 2)
+    upper_half = np.split(np.split(X, 2, axis = 1)[0], 2, axis = 2)
+    lower_half = np.split(np.split(X, 2, axis = 1)[1], 2, axis = 2)
 
     upper_left = upper_half[0]
     upper_right = upper_half[1]
     lower_left = lower_half[0]
     lower_right = lower_half[1]
 
-    temp[:,0] = upper_left.flatten()
-    temp[:,1] = upper_right.flatten()
-    temp[:,2] = lower_left.flatten()
-    temp[:,3] = lower_right.flatten()
+    for i in range(0,31):
+        temp[i,:,0] = upper_left[i,:,:].flatten()
+        temp[i,:,1] = upper_right[i,:,:].flatten()
+        temp[i,:,2] = lower_left[i,:,:].flatten()
+        temp[i,:,3] = lower_right[i,:,:].flatten()
+
     #print(temp[:,0].shape)
     #print(temp[:,0].size)
     A = np.random.rand(32,256)
@@ -113,13 +106,12 @@ def feature_map(X):
 
     #print("b shape",b.shape)
     #print("b' shape", b.T.shape)
-    f = np.zeros((32,4))
+    f = np.zeros(((32,32,4)))
     for k in range(0,3):
     #f[:,k] = relu(A*temp[:,k]+b)
-
-        fm = np.matmul(A , temp[:,k]) + b.T
-
-        f[:,k] = torch.clamp(torch.from_numpy(fm), min = 0)
+        for j in range(0,31):
+            fm = np.matmul(A ,temp[j,:,k]) + b.T
+            f[j,:,k] = torch.clamp(torch.from_numpy(fm), min = 0)
     """
     feature_tensor = np.zeros(32,32,32,32)
     for i in range(0,31):
@@ -172,14 +164,19 @@ if str == '1':
             f = torch.from_numpy(feature_map(aver(inputs))).float()
             y = labels.float()
 
+            y_pred1 = torch.randn(32, 1)
+            y_pred2 = torch.randn(32, 1)
+            y_pred3 = torch.randn(32, 1)
+
 
             #normal multiplication between inner product: coresponds to sum-product NN
-            y_pred1 = torch.dot(w1[:,0],f[:,0]) * torch.dot(w2[:,0],f[:,1]) * torch.dot(w3[:,0],f[:,2]) * torch.dot(w4[:,0],f[:,3])
-            y_pred2 = torch.dot(w1[:,1],f[:,0]) * torch.dot(w2[:,1],f[:,1]) * torch.dot(w3[:,1],f[:,2]) * torch.dot(w4[:,1],f[:,3])
-            y_pred3 = torch.dot(w1[:,2],f[:,0]) * torch.dot(w2[:,2],f[:,1]) * torch.dot(w3[:,2],f[:,2]) * torch.dot(w4[:,2],f[:,3])
+            for batch_axis in range(0,31):
+                y_pred1[batch_axis] = torch.dot(w1[:,0],f[batch_axis,:,0]) * torch.dot(w2[:,0],f[batch_axis,:,1]) * torch.dot(w3[:,0],f[batch_axis,:,2]) * torch.dot(w4[:,0],f[batch_axis,:,3])
+                y_pred2[batch_axis] = torch.dot(w1[:,1],f[batch_axis,:,0]) * torch.dot(w2[:,1],f[batch_axis,:,1]) * torch.dot(w3[:,1],f[batch_axis,:,2]) * torch.dot(w4[:,1],f[batch_axis,:,3])
+                y_pred3[batch_axis] = torch.dot(w1[:,2],f[batch_axis,:,0]) * torch.dot(w2[:,2],f[batch_axis,:,1]) * torch.dot(w3[:,2],f[batch_axis,:,2]) * torch.dot(w4[:,2],f[batch_axis,:,3])
             y_pred  = y_pred1 + y_pred2 + y_pred3
 
-            loss = (y_pred - y).pow(2)
+            loss = (y_pred - y).pow(2).sum()
             print(epoch, i ,"loss:", loss.item())
 
             loss.backward()
@@ -206,10 +203,15 @@ if str == '2':
             f = torch.from_numpy(feature_map(aver(inputs))).float()
             y = labels.float()
 
+            y_pred1 = torch.randn(32,1)
+            y_pred2 = torch.randn(32,1)
+            y_pred3 = torch.randn(32,1)
+
             # normal multiplication between inner product: coresponds to sum-product NN
-            y_pred1 = torch.max(torch.max(torch.max(torch.dot(w1[:,0],f[:,0]).clamp(min = 0),torch.dot(w2[:,0],f[:,1])),torch.dot(w3[:,0],f[:,2]) ),torch.dot(w4[:,0],f[:,3]))
-            y_pred2 = torch.max(torch.max(torch.max(torch.dot(w1[:,1],f[:,0]).clamp(min = 0),torch.dot(w2[:,1],f[:,1])),torch.dot(w3[:,1],f[:,2]) ),torch.dot(w4[:,1],f[:,3]))
-            y_pred3 = torch.max(torch.max(torch.max(torch.dot(w1[:,2],f[:,0]).clamp(min = 0),torch.dot(w2[:,2],f[:,1])),torch.dot(w3[:,2],f[:,2]) ),torch.dot(w4[:,2],f[:,3]))
+            for batch_axis in range(0,31):
+                y_pred1[batch_axis] = torch.max(torch.max(torch.max(torch.dot(w1[:,0],f[batch_axis,:,0]).clamp(min = 0),torch.dot(w2[:,0],f[batch_axis,:,1])),torch.dot(w3[:,0],f[batch_axis,:,2]) ),torch.dot(w4[:,0],f[batch_axis,:,3]))
+                y_pred2[batch_axis] = torch.max(torch.max(torch.max(torch.dot(w1[:,1],f[batch_axis,:,0]).clamp(min = 0),torch.dot(w2[:,1],f[batch_axis,:,1])),torch.dot(w3[:,1],f[batch_axis,:,2]) ),torch.dot(w4[:,1],f[batch_axis,:,3]))
+                y_pred3[batch_axis] = torch.max(torch.max(torch.max(torch.dot(w1[:,2],f[batch_axis,:,0]).clamp(min = 0),torch.dot(w2[:,2],f[batch_axis,:,1])),torch.dot(w3[:,2],f[batch_axis,:,2]) ),torch.dot(w4[:,2],f[batch_axis,:,3]))
             y_pred = y_pred1 + y_pred2 + y_pred3
 
             loss = (y_pred - y).pow(2).sum()
