@@ -1,0 +1,304 @@
+import torch
+import torchvision
+import torchvision.transforms as transforms
+import matplotlib.pyplot as plt
+import numpy as np
+import torch
+import time
+import tensorly as tl
+from math import ceil
+from torch.autograd import Variable
+#CP decomposition
+from tensorly.decomposition import parafac
+
+transform = transforms.Compose(
+    [transforms.ToTensor(),
+     transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))])
+
+T = 16
+b_size = 250
+R = 64
+learning_rate = 1e-4
+M = 32
+epoch_num = 3
+
+trainset = torchvision.datasets.CIFAR10(root='./data', train=True,
+                                        download=True, transform=transform)
+trainloader = torch.utils.data.DataLoader(trainset, batch_size=b_size,
+                                          shuffle=True, num_workers=2)
+testset = torchvision.datasets.CIFAR10(root='./data', train=False,
+                                       download=True, transform=transform)
+testloader = torch.utils.data.DataLoader(testset, batch_size=4,
+                                         shuffle=False, num_workers=2)
+
+
+classes = ('plane', 'car', 'bird', 'cat',
+           'deer', 'dog', 'frog', 'horse', 'ship', 'truck')
+
+# get a random image
+dataiter = iter(trainloader)
+images, labels = dataiter.next()
+imagesize = images.size()[0]
+#print(images.size())
+
+#shape: 32 3 32 32
+#take average over RGB channels
+def aver(image):
+    image_np = image.numpy()
+    image_input = np.zeros(((32,32,32)))
+    for i in range(0,31):
+         for j in range(0,31):
+             image_input[:,i,j] =(image_np[:,0,i,j] + image_np[:,1,i,j] + image_np[:,2,i,j])/3
+    return image_input
+#output is 32 1 32 32
+
+#Test average
+#print(aver(images).shape)
+
+#Input: numpy 2-D matrix(array), e.g Cifer-10, 32*32 matrix (RGB?)
+#First,devide it into window-patches,then reshape to column vectors, pick window size 16*16, no overlap, finally we get (x_1,...,x_4). x_i \in R^256
+#Second, pick a local feature map for each x_i, f:R^256--->R^32, the global feature map is defined as a tensor \in R^{256*256...*256} #64, see E.M paper (2)
+#Here we pick local feature map as ReLU(Ax+b), A,b are hyper-parameters. Return global feature map(a tensor)
+#We pick a rather huge window and map it to lower dimensional feature space, but this still leads to a quite big feature tensor
+def feature_map(X):
+    num_split = np.sqrt(T)
+    #num_split = np.sqrt(X.shape[1]**2/T)
+    print(num_split)
+    piece_length = X.shape[1]**2/T
+    temp = np.zeros(((b_size,X.piece_length,T)))
+    #print(temp.shape)
+    """
+    upper1 = np.hsplit(np.vsplit(mat, num_split)[0], num_split)
+    upper2 = np.hsplit(np.vsplit(mat, num_split)[1], num_split)
+    upper3 = np.hsplit(np.vsplit(mat, num_split)[2], num_split)
+    upper4 = np.hsplit(np.vsplit(mat, num_split)[3], num_split)
+    upper5 = np.hsplit(np.vsplit(mat, num_split)[4], num_split)
+    upper6 = np.hsplit(np.vsplit(mat, num_split)[5], num_split)
+    upper7 = np.hsplit(np.vsplit(mat, num_split)[6], num_split)
+    upper8 = np.hsplit(np.vsplit(mat, num_split)[7], num_split)
+    for i in range(0,7):
+        temp[:,i] = upper1[i].flatten()
+    for i in range(8,15):
+        temp[:,i] = upper2[i - 8].flatten()
+    for i in range(16,23):
+        temp[:,i] = upper3[i - 16].flatten()
+    for i in range(24,31):
+        temp[:,i] = upper4[i - 24].flatten()
+    for i in range(32,39):
+        temp[:,i] = upper5[i - 32].flatten()
+    for i in range(40,47):
+        temp[:,i] = upper6[i - 40].flatten()
+    for i in range(48,55):
+        temp[:,i] = upper7[i - 48].flatten()
+    for i in range(56,63):
+        temp[:,i] = upper8[i - 56].flatten()
+    
+"""
+    #upper = np.zeros(((b_size,X.shape[1],X.shape[1])))
+    #for n in range(0,num_split-1):
+
+    upper1 = np.split(np.split(X, num_split, axis = 1)[0], num_split, axis = 2)
+    upper2 = np.split(np.split(X, num_split, axis = 1)[1], num_split, axis = 2)
+    upper3 = np.split(np.split(X, num_split, axis = 1)[2], num_split, axis = 2)
+    upper4 = np.split(np.split(X, num_split, axis = 1)[3], num_split, axis = 2)
+    #lower_half = np.split(np.split(X, 2, axis = 1)[1], 2, axis = 2)
+    
+    """
+    upper_left = upper_half[0]
+    upper_right = upper_half[1]
+    lower_left = lower_half[0]
+    lower_right = lower_half[1]
+    """
+
+    for i in range(0,b_size-1):
+        for j in range(0,3):
+            temp[i,:,j] = (upper1[j])[i,:,:].flatten()
+        for j in range(4,7):
+            temp[i,:,j] = (upper2[j])[i,:,:].flatten()
+        for j in range(8,11):
+            temp[i,:,j] = (upper3[j])[i,:,:].flatten()
+        for j in range(12,15):
+            temp[i,:,j] = (upper4[j])[i,:,:].flatten()   
+    #print(temp[:,0].shape)
+    #print(temp[:,0].size)
+    A = np.random.rand(M,piece_length)
+    b = np.random.rand(M,1)
+
+    #print("b shape",b.shape)
+    #print("b' shape", b.T.shape)
+    f = np.zeros(((b_size,M,R)))
+    for k in range(0,R-1):
+    #f[:,k] = relu(A*temp[:,k]+b)
+        for j in range(0,b_size-1):
+            fm = np.matmul(A ,temp[j,:,k]) + b.T
+            f[j,:,k] = torch.clamp(torch.from_numpy(fm), min = 0)
+    """
+    feature_tensor = np.zeros(32,32,32,32)
+    for i in range(0,31):
+        for j in range(0,31):
+            for l in range(0,31):
+                for m in range(0,31):
+                    feature_tensor[i,j,k,m] = f[i,0]*f[j,1]*f[l,2]*f[m,3]
+
+    return feature_tensor
+    """
+    #f(x^t) in each column
+    return f
+
+#randomly initialize learnable weights W
+#random number from a normal distribution
+#input to tl.tensor must be a numpy array
+#unnecessay to explicitly produce a full format
+#temp = torch.randn(M,M,M,M,M,M,M,M,M,M,M,M,M,M,M,M)
+#W_full = tl.tensor(temp.numpy())
+
+#Applying CP decomposition to W
+#from tensorly.decomposition import parafac
+#factor = parafac(W_full,rank = R)
+random_set = torch.randn(R,M,T)
+factor = []
+#factor would be a list consists 4 matrixs, each one is 32*3 ,each column represent one term in CP-decomposition
+#factor is a list
+
+#w_i is a 32*4 matrix, each column is one component of CP decomposition
+#w1 is convert to torch tensor form, ready to use Variable to set 'requires_grad'
+wi = torch.zeros(T,M,R)
+for i in range(0,T-1):
+    wi[i,:,:] = torch.from_numpy(factor[i])
+    wi[i,:,:] = Variable(wi[i,:,:], requires_grad = True)
+#w1 = torch.from_numpy(factor[0])
+#w2 = torch.from_numpy(factor[1])
+#w3 = torch.from_numpy(factor[2])
+#w4 = torch.from_numpy(factor[3])
+#w1 = Variable(w1, requires_grad = True)
+#w2 = Variable(w2, requires_grad = True)
+#w3 = Variable(w3, requires_grad = True)
+#w4 = Variable(w4, requires_grad = True)
+
+str = input("which mode:")
+print(str)
+
+if str == '1':
+    for epoch in range(epoch_num):
+
+        for i,data in enumerate(trainloader,0):
+            inputs,labels = data
+
+            # f is a matrix, each column is f(x^t), t = 1,2,3,4
+            #torch.dot 's argument must float tensor, but when transform from numpy to torch, default is double tensor
+            f = torch.from_numpy(feature_map(aver(inputs))).float()
+            y = labels.float()
+            
+            y_pred = torch.randn(b_size,R)  
+            #y_pred1 = torch.randn(b_size, 1)
+            #y_pred2 = torch.randn(b_size, 1)
+            #y_pred3 = torch.randn(b_size, 1)
+
+            #normal multiplication between inner product: coresponds to sum-product NN
+            for batch_axis in range(0,b_size - 1):
+                for rank in range(0,R-1):
+                    for t in range(0,T-2):
+                        y_pred[batch_axis,rank] = torch.dot(wi[t,:,rank],f[batch_axis,:,t]) * torch.dot(wi[t+1,:,rank],f[batch_axis,:,t+1])
+            #for batch_axis in range(0,b_size-1):
+            #    y_pred1[batch_axis] = torch.dot(w1[:,0],f[batch_axis,:,0]) * torch.dot(w2[:,0],f[batch_axis,:,1]) * torch.dot(w3[:,0],f[batch_axis,:,2]) * torch.dot(w4[:,0],f[batch_axis,:,3])
+            #    y_pred2[batch_axis] = torch.dot(w1[:,1],f[batch_axis,:,0]) * torch.dot(w2[:,1],f[batch_axis,:,1]) * torch.dot(w3[:,1],f[batch_axis,:,2]) * torch.dot(w4[:,1],f[batch_axis,:,3])
+            #    y_pred3[batch_axis] = torch.dot(w1[:,2],f[batch_axis,:,0]) * torch.dot(w2[:,2],f[batch_axis,:,1]) * torch.dot(w3[:,2],f[batch_axis,:,2]) * torch.dot(w4[:,2],f[batch_axis,:,3])
+            y_predict  = torch.matmul(y_pred,torch.ones(R,1))
+
+            loss = (y_predict - y).pow(2).sum()
+            print(epoch, i ,"loss:", loss.item())
+
+
+            '''
+            parameter = [w1,w2, w3, w4]
+            optimizer = torch.optim.Adam(parameter, lr = 0.001)
+            zero_grad(parameter)
+            loss.backward()
+            opimizer.step()
+
+            '''
+
+            loss.backward()
+
+            with torch.no_grad():
+                for i in range(0,T-1):
+                    wi[i,:,:] -= learning_rate * wi[i,:,:].grad
+                for i in range(0,T-1):
+                    wi[i,:,:].grad.zero_()
+                #w1 -= learning_rate * w1.grad
+                #w2 -= learning_rate * w2.grad
+                #w3 -= learning_rate * w3.grad
+                #w4 -= learning_rate * w4.grad
+
+                #w1.grad.zero_()
+                #w2.grad.zero_()
+                #w3.grad.zero_()
+                #w4.grad.zero_()
+
+if str == '2':
+    for epoch in range(epoch_num):
+
+        for i, data in enumerate(trainloader, 0):
+            inputs, labels = data
+
+            # f is a matrix, each column is f(x^t), t = 1,2,3,4
+            # torch.dot 's argument must float tensor, but when transform from numpy to torch, default is double tensor
+            f = torch.from_numpy(feature_map(aver(inputs))).float()
+            y = labels.float()
+
+            y_pred = torch.randn(b_size,R)       
+            #y_pred1 = torch.randn(32,1)
+            #y_pred2 = torch.randn(32,1)
+            #y_pred3 = torch.randn(32,1)
+
+            # normal multiplication between inner product: coresponds to sum-product NN
+            #first = torch.dot(wi[0,:,0],f[batch_axis]
+
+            for batch_axis in range(0,b_size-1):
+                for r in range(0,R-1):
+                    for t in range(0,T-2):
+                        temp  = torch.max(torch.dot(wi[t,:,r],f[batch_axis,:,t]).clamp(min = 0))
+                        y_pred[batch_axis,r] = torch.max(temp, torch.dot(wi[t+1,:,r],f[batch_axis,:,t+1]))
+
+
+            #for batch_axis in range(0,b_size-1):
+            #    y_pred1[batch_axis] = torch.max(torch.max(torch.max(torch.dot(w1[:,0],f[batch_axis,:,0]).clamp(min = 0),torch.dot(w2[:,0],f[batch_axis,:,1])),torch.dot(w3[:,0],f[batch_axis,:,2]) ),torch.dot(w4[:,0],f[batch_axis,:,3]))
+            #    y_pred2[batch_axis] = torch.max(torch.max(torch.max(torch.dot(w1[:,1],f[batch_axis,:,0]).clamp(min = 0),torch.dot(w2[:,1],f[batch_axis,:,1])),torch.dot(w3[:,1],f[batch_axis,:,2]) ),torch.dot(w4[:,1],f[batch_axis,:,3]))
+            #    y_pred3[batch_axis] = torch.max(torch.max(torch.max(torch.dot(w1[:,2],f[batch_axis,:,0]).clamp(min = 0),torch.dot(w2[:,2],f[batch_axis,:,1])),torch.dot(w3[:,2],f[batch_axis,:,2]) ),torch.dot(w4[:,2],f[batch_axis,:,3]))
+            #y_pred = y_pred1 + y_pred2 + y_pred3
+            y_predict  = torch.matmul(y_pred,torch.ones(R,1))
+
+            loss = (y_predict - y).pow(2).sum()
+            print(epoch, i, "loss:", loss.item())
+
+            loss.backward()
+            """
+            with torch.no_grad():
+                w1 -= learning_rate * w1.grad
+                w2 -= learning_rate * w2.grad
+                w3 -= learning_rate * w3.grad
+                w4 -= learning_rate * w4.grad
+
+                w1.grad.zero_()
+                w2.grad.zero_()
+                w3.grad.zero_()
+                w4.grad.zero_()
+            """
+            with torch.no_grad():
+                for i in range(0,T-1):
+                    wi[i,:,:] -= learning_rate * wi[i,:,:].grad
+                for i in range(0,T-1):
+                    wi[i,:,:].grad.zero_()
+ 
+
+
+
+
+
+
+
+
+
+
+
+
