@@ -5,6 +5,9 @@ import torchvision.transforms as transforms
 import matplotlib.pyplot as plt
 from torch.autograd import Variable
 
+torch.backends.cudnn.deterministic = True
+torch.manual_seed(9)
+
 dtype = torch.float
 device = torch.device("cpu")
 # device = torch.device("cuda:0") # Uncomment this to run on GPU
@@ -14,7 +17,7 @@ transform = transforms.Compose([transforms.ToTensor(), transforms.Normalize((0.5
 
 # batch size
 bsize = 250
-learning_rate = 1e-4
+learning_rate = 1e-1
 T = 16
 R = 64
 M = 32
@@ -60,12 +63,14 @@ def feature_map(X):
             temp[i, :, j] = (upper4[j-12])[i, :, :].flatten()
 
     A = np.random.rand(M, piece_length)
-    b = np.random.randn(M, 1)
+    #rand a vetor: default is a row vector
+    b = np.random.rand(M).reshape(1, M)
 
     f = np.zeros(((bsize, M, T)))
     for k in range(0, T - 1):
         for j in range(0, bsize - 1):
-            fm = np.matmul(A, temp[j, :, k]) + b.T
+            # + care for broadcast!
+            fm = np.matmul(A, temp[j, :, k]).reshape(1, M) #+ b
             f[j, :, k] = torch.clamp(torch.from_numpy(fm), min=0)
     return f
 
@@ -76,22 +81,36 @@ def feature_map(X):
 # argument:W:CP decomposition elements f:feature map
 def inner(weights_CP, images):
     f = torch.from_numpy(feature_map(rgb(images))).float()
-    y_pred = torch.randn(bsize, R)
+    #print("fsize:", f.size())
+    y_pred = torch.zeros(bsize, R)
+
     # for batch_axis in range(0,bsize-1):
     # replace by lift a dimension and do matrix multiplication
+    """
+    print('weights_cp 00', weights_CP[0,:,0])
+    print("f 0", f[:,:,0])
+    a = torch.matmul(f[:, :, 1], weights_CP[1, :, 1])
+    print('a', a.size())
+    """
+
     for rank in range(0, R - 1):
         temp = 1
-        for t in range(0, T - 1):
-            temp = temp * torch.matmul(f[:, :, t], weights_CP[t, :, rank])
+        for k in range(0, T - 1):
+            temp = temp * torch.matmul(f[:, :, k], weights_CP[k, :, rank])
+        #print("temp:", temp)
         y_pred[:, rank] = temp
-
-    y_predict = torch.matmul(y_pred, torch.ones(R, 1))
+    #print('y_pred', y_pred.size(), y_pred[41, :])
+    #torch.sum dim1 row sum, squeezed
+    y_predict = torch.sum(y_pred, 1)
+    #print("predict000:", y_predict)
+    #y_predict = torch.matmul(y_pred, torch.ones(R))
+    #print("y_predict size", y_predict.size())
     return y_predict
 
 
 def g_inner(weights_CP, images):
     f = torch.from_numpy(feature_map(rgb(images))).float()
-    y_pred = torch.randn(bsize, R)
+    y_pred = torch.zeros(bsize, R)
     # for batch_axis in range(0,bsize-1):
     for r in range(0, R - 1):
         temp = torch.zeros(1)
@@ -104,35 +123,40 @@ def g_inner(weights_CP, images):
 
 
 # randomly generate the component of CP decomposition
-weights_CP = torch.randn(T, M, R)
+weights_CP = torch.rand(T, M, R, device=device, dtype=dtype, requires_grad=True)
+
+"""
 for t in range(0, T - 1):
     #weights_CP[t, :, :] = Variable(torch.randn(M, R), requires_grad=True)
     weights_CP[t, :, :] = torch.rand(M, R, requires_grad=True)
-
+"""
 str = input("which mode? mode1: sum-product NN, mode2: shollow CNN")
-print(str)
 
 if str == '1':
     sss = input("which training method?")
-    print(sss)
     if sss == "1":
         for epoch in range(epoch_num):
             for i, data in enumerate(trainloader, 0):
                 inputs, labels = data
-                if (inputs.size()[0] != bsize):
+                if inputs.size()[0] != bsize:
                     continue
                 y = labels.float()
                 y_predict = inner(weights_CP, inputs)
+                
+                print("y:", y.size())
+                print("y_predict:", y_predict.size())
                 loss = (y_predict - y).pow(2).sum()
+                print("loss:", loss)
                 print(epoch, i, "loss:", loss.item())
 
                 loss.backward()
 
+                print("grad", torch.norm(weights_CP.grad).item())
                 with torch.no_grad():
-                    for i in range(0, T - 1):
-                        weights_CP[i, :, :] -= learning_rate * weights_CP[i, :, :].grad
-                    for i in range(0, T - 1):
-                        weights_CP[i, :, :].grad.zero_()
+                    #for i in range(0, T - 1):
+                    weights_CP -= learning_rate * weights_CP.grad
+                    #for i in range(0, T - 1):
+                    weights_CP.grad.zero_()
 
         print('Finished Training')
 
@@ -172,7 +196,6 @@ if str == '1':
 
 if str == '2':
     sss = input("which training method?")
-    print(sss)
     if sss == "1":
         for epoch in range(epoch_num):
             for i, data in enumerate(trainloader, 0):
