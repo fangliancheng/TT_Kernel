@@ -17,12 +17,12 @@ transform = transforms.Compose([transforms.ToTensor(), transforms.Normalize((0.5
 
 # batch size
 bsize = 250
-learning_rate = 1e-8
+learning_rate = 1e-4
 T = 16
 R = 64
 M = 32
 num_label = 10
-epoch_num = 30
+epoch_num = 300
 
 trainset = torchvision.datasets.CIFAR10(root='./data', train=True, download=True, transform=transform)
 trainloader = torch.utils.data.DataLoader(trainset, batch_size=bsize, shuffle=True, num_workers=2)
@@ -234,8 +234,12 @@ if str == '2':
                 if inputs.size()[0] != bsize:
                     continue
                 y = labels.float()
+                y = onehott(y)
+
                 y_predict = g_inner(weights_CP, inputs)
-                loss = (y_predict - y).pow(2).sum()
+                m = torch.nn.Softmax()
+                y_predict = m(y_predict)
+                loss = 1/2*(torch.t(y_predict) - y).pow(2).sum()
                 print(epoch, i, "loss:", loss.item())
 
                 loss.backward()
@@ -261,6 +265,8 @@ if str == '2':
                 y = onehott(y)
 
                 y_predict = g_inner(weights_CP, inputs)
+                m = torch.nn.Softmax()
+                y_predict = m(y_predict)
                 loss = 1/2 * (torch.t(y_predict) - y).pow(2).sum()
                 print(epoch, i, "loss:", loss.item())
                 optimizer.zero_grad()
