@@ -15,4 +15,4 @@ In supervised learning, we consider a naive linear classifer:
 
 In [1], they proposed to TT decompose the W, which can reduce parameter number, update certain part of W in each training iteration.
 
-In [2], they proved that if we futher replace scalar product of the score function by any generalized operation(e.g max{x,y,0}), the score function coresponds to the output of a particular RNN.
+In [2], they proved that if we futher replace scalar product of the score function by some generalized operations(e.g max{x,y,0}), the score function coresponds to the output of a particular RNN.
